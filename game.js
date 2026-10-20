@@ -294,24 +294,38 @@
     gunStatus(`gun awake, fw ${serialGun ? serialGun.firmware || '?' : '?'} · buttons ${ev.state1.toString(2).padStart(8, '0')} ${ev.state2.toString(2).padStart(8, '0')}`);
   }
   // auto: connect only if the browser already has permission for the gun (no click available at page load).
+  let waking = false;
   async function wakeGun(auto) {
     if (auto !== true && serialGun) { const g = serialGun; serialGun = null; await g.close(); $('wake').textContent = 'Wake gun (serial)'; gunStatus('gun disconnected'); return; }
-    if (serialGun) return;
+    if (serialGun || waking) return;
     if (!navigator.serial) { gunStatus('Web Serial needs Chrome or Edge'); return; }
-    let g = null;
-    try {
-      const port = await SindenGun.pickPort(auto !== true);
-      if (!port) { gunStatus('gun not connected: click anywhere once to pick it'); return false; }
-      gunStatus('connecting...');
-      g = new SindenGun.SindenSerial(port, { onEvent: onGunEvent, onLog: (s) => gunStatus(s) });
-      await g.open();
-      await g.wake({ recoil: S.recoil ? { strength: S.recoilStr } : null });
-      serialGun = g; prevBtn = [0, 0];
-      $('wake').textContent = 'Disconnect gun';
-      gunStatus(`gun awake, firmware ${g.firmware || '?'}`);
-    } catch (e) {
-      gunStatus('gun error: ' + (e.message || e.name) + ' (if it keeps failing, unplug and replug the gun)');
-      if (g) g.close();
+    waking = true;
+    try { return await tryWake(auto); } finally { waking = false; }
+  }
+  async function tryWake(auto) {
+    const port = await SindenGun.pickPort(auto !== true).catch((e) => { gunStatus('gun error: ' + (e.message || e.name)); return undefined; });
+    if (port === undefined) return;
+    if (!port) { gunStatus('gun not connected: click anywhere once to pick it'); return false; }
+    // The handshake often fails right after plugging in or page load, so retry a few times.
+    const TRIES = 5, RETRY_MS = 3000;
+    for (let n = 1; n <= TRIES; n++) {
+      let g = null;
+      try {
+        gunStatus(n > 1 ? `connecting... (try ${n}/${TRIES})` : 'connecting...');
+        g = new SindenGun.SindenSerial(port, { onEvent: onGunEvent, onLog: (s) => gunStatus(s) });
+        await g.open();
+        await g.wake({ recoil: S.recoil ? { strength: S.recoilStr } : null });
+        serialGun = g; prevBtn = [0, 0];
+        $('wake').textContent = 'Disconnect gun';
+        gunStatus(`gun awake, firmware ${g.firmware || '?'}`);
+        return;
+      } catch (e) {
+        if (g) await g.close();
+        if (n === TRIES) { gunStatus('gun error: ' + (e.message || e.name) + ' (if it keeps failing, unplug and replug the gun)'); return; }
+        gunStatus(`gun error: ${e.message || e.name}, retrying in ${RETRY_MS / 1000}s (${n}/${TRIES})`);
+        await new Promise((r) => setTimeout(r, RETRY_MS));
+        if (serialGun) return;
+      }
     }
   }
 
