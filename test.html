@@ -1,0 +1,177 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>tracker test</title>
+<pre id="out">running</pre>
+<script src="tracker.js"></script>
+<script>
+// Synthetic camera frame: screen occupies quad Q in a 320x240 image; border ring is
+// bright, game content inside is bright too, with a gap between. Ground truth for the
+// centre pixel comes from the exact inverse homography.
+const W = 320, H = 240, T = SindenTracker;
+const unit = [[0, 0], [1, 0], [1, 1], [0, 1]];
+
+function frame(Q, extras) {
+  const Hq = T.solveHomography(Q, unit);
+  const data = new Uint8ClampedArray(W * H * 4);
+  const tu = 0.028, tv = 0.05;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const [u, v] = T.applyH(Hq, x, y);
+    let b = 12;
+    if (u >= 0 && u <= 1 && v >= 0 && v <= 1) {
+      const ring = u < tu || u > 1 - tu || v < tv || v > 1 - tv;
+      const content = u > 0.2 && u < 0.3 && v > 0.3 && v < 0.5;
+      if (ring || content) b = 255;
+    }
+    const i = (y * W + x) * 4;
+    data[i] = data[i + 1] = data[i + 2] = b; data[i + 3] = 255;
+  }
+  if (extras) extras(data);
+  return { data, width: W, height: H, truth: T.applyH(Hq, (W - 1) / 2, (H - 1) / 2) };
+}
+function disc(data, cx, cy, r) {
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    if ((x - cx) ** 2 + (y - cy) ** 2 < r * r) { const i = (y * W + x) * 4; data[i] = data[i + 1] = data[i + 2] = 255; }
+}
+
+const cases = [
+  ['straight-on',        [[50, 30], [270, 30], [270, 200], [50, 200]]],
+  ['tilted',             [[50, 30], [270, 45], [262, 200], [40, 185]]],
+  ['keystone (off-axis)',[[70, 40], [250, 25], [275, 205], [45, 190]]],
+  ['rolled ~15deg',      [[75, 20], [285, 75], [245, 225], [35, 170]]],
+  ['small/far',          [[120, 90], [200, 92], [199, 150], [121, 148]]],
+];
+const lines = [];
+let worst = 0, fail = 0;
+for (const [name, Q] of cases) {
+  const f = frame(Q), tr = T.createTracker();
+  const r = tr.update(f);
+  if (!r.valid) { lines.push(`FAIL ${name}: not detected`); fail++; continue; }
+  const err = Math.hypot(r.u - f.truth[0], r.v - f.truth[1]);
+  worst = Math.max(worst, err);
+  lines.push(`${err < 0.02 ? 'ok  ' : 'FAIL'} ${name}: got (${r.u.toFixed(3)},${r.v.toFixed(3)}) truth (${f.truth[0].toFixed(3)},${f.truth[1].toFixed(3)}) err ${err.toFixed(4)}`);
+  if (err >= 0.02) fail++;
+}
+// Lamp decoy brighter/bigger than nothing: must not be mistaken for the border
+{
+  const f = frame([[50, 30], [270, 30], [270, 200], [50, 200]], d => disc(d, 300, 20, 14));
+  const r = T.createTracker().update(f);
+  const ok = r.valid && Math.hypot(r.u - f.truth[0], r.v - f.truth[1]) < 0.02;
+  lines.push(`${ok ? 'ok  ' : 'FAIL'} lamp decoy ignored`); if (!ok) fail++;
+}
+{
+  const f = frame([[50, 30], [270, 30], [270, 200], [50, 200]], d => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (x > 250 && y < 120) { const i = (y * W + x) * 4; d[i] = d[i+1] = d[i+2] = 12; } } disc(d, 300, 20, 14); });
+  const r = T.createTracker().update(f);
+  lines.push(`ok   lamp only / partial border -> valid=${r.valid}`);
+}
+{ // border cut off by frame edge => invalid (treated as off-screen)
+  const f = frame([[-30, 30], [270, 30], [270, 200], [-30, 200]]);
+  const r = T.createTracker().update(f);
+  lines.push(`${!r.valid ? 'ok  ' : 'FAIL'} clipped border rejected`); if (r.valid) fail++;
+}
+{ // nothing in view
+  const f = { data: new Uint8ClampedArray(W * H * 4), width: W, height: H };
+  const r = T.createTracker().update(f);
+  lines.push(`${!r.valid ? 'ok  ' : 'FAIL'} empty frame -> invalid`); if (r.valid) fail++;
+}
+{ // timing
+  const f = frame([[50, 30], [270, 45], [262, 200], [40, 185]]), tr = T.createTracker();
+  const t0 = performance.now(); for (let i = 0; i < 200; i++) tr.update(f);
+  lines.push(`time per frame: ${((performance.now() - t0) / 200).toFixed(2)} ms`);
+}
+{ // jump guard: one glitchy frame is ignored; a real, sustained move is followed
+  const A = [[50, 30], [270, 30], [270, 200], [50, 200]], B = [[150, 40], [290, 40], [290, 190], [150, 190]];
+  const fa = frame(A), fb = frame(B), tr = T.createTracker({ alpha: 1 });
+  const a1 = tr.update(fa), g1 = tr.update(fb), a2 = tr.update(fa);
+  const glitchIgnored = Math.hypot(g1.u - a1.u, g1.v - a1.v) < 0.01 && Math.hypot(a2.u - a1.u, a2.v - a1.v) < 0.01;
+  lines.push(`${glitchIgnored ? 'ok  ' : 'FAIL'} single-frame glitch ignored (held=${!!g1.held})`); if (!glitchIgnored) fail++;
+  const tr2 = T.createTracker({ alpha: 1 }); tr2.update(fa); const h1 = tr2.update(fb), h2 = tr2.update(fb);
+  const followed = h1.held && !h2.held && Math.hypot(h2.u - fb.truth[0], h2.v - fb.truth[1]) < 0.02;
+  lines.push(`${followed ? 'ok  ' : 'FAIL'} sustained jump followed on the 2nd frame`); if (!followed) fail++;
+}
+{ // full-resolution frame: still accurate and fast
+  const W2 = 640, H2 = 480, Q = [[100, 60], [540, 90], [524, 400], [80, 370]], Hq = T.solveHomography(Q, unit);
+  const d = new Uint8ClampedArray(W2 * H2 * 4);
+  for (let y = 0; y < H2; y++) for (let x = 0; x < W2; x++) {
+    const [u, v] = T.applyH(Hq, x, y); let b = 12;
+    if (u >= 0 && u <= 1 && v >= 0 && v <= 1 && (u < 0.028 || u > 0.972 || v < 0.05 || v > 0.95)) b = 255;
+    const i = (y * W2 + x) * 4; d[i] = d[i + 1] = d[i + 2] = b; d[i + 3] = 255;
+  }
+  const fr = { data: d, width: W2, height: H2 }, tr = T.createTracker(), truth = T.applyH(Hq, (W2 - 1) / 2, (H2 - 1) / 2);
+  const r = tr.update(fr), err = Math.hypot(r.u - truth[0], r.v - truth[1]);
+  const t0 = performance.now(); for (let i = 0; i < 50; i++) T.createTracker().update(fr);
+  const ms = (performance.now() - t0) / 50;
+  lines.push(`${r.valid && err < 0.01 ? 'ok  ' : 'FAIL'} 640x480: err ${err.toFixed(4)}, ${ms.toFixed(2)} ms/frame`); if (!(r.valid && err < 0.01)) fail++;
+}
+{ // barrel-distorted lens (k1 = -0.178, the reference camera's value): undistortion + lens fit
+  const W2 = 640, H2 = 480, K = -0.178;
+  const render = (Q) => {
+    const Hq = T.solveHomography(Q, unit), d = new Uint8ClampedArray(W2 * H2 * 4);
+    for (let y = 0; y < H2; y++) for (let x = 0; x < W2; x++) {
+      const [xu, yu] = T.undistortPt(x, y, K, W2, H2), [u, v] = T.applyH(Hq, xu, yu); let b = 12;
+      if (u >= 0 && u <= 1 && v >= 0 && v <= 1 && (u < 0.03 || u > 0.97 || v < 0.045 || v > 0.955)) b = 255;
+      const i = (y * W2 + x) * 4; d[i] = d[i + 1] = d[i + 2] = b; d[i + 3] = 255;
+    }
+    return { data: d, width: W2, height: H2, truth: T.applyH(Hq, (W2 - 1) / 2, (H2 - 1) / 2) };
+  };
+  const quads = [
+    [[120, 80], [520, 70], [530, 400], [110, 390]], [[90, 60], [560, 100], [540, 420], [70, 380]],
+    [[150, 120], [480, 100], [490, 380], [140, 360]], [[160, 50], [560, 140], [500, 430], [100, 330]],
+    [[60, 90], [500, 50], [520, 430], [90, 400]], [[200, 40], [590, 120], [470, 440], [80, 300]],
+  ];
+  const frames = quads.map(render), e0 = [], e1 = [], samples = [];
+  for (const f of frames) {
+    const t0 = T.createTracker({ alpha: 1, k1: 0 }), r0 = t0.update(f);
+    samples.push({ sides: t0.lastSides, w: W2, h: H2 });
+    const r1 = T.createTracker({ alpha: 1, k1: K }).update(f);
+    e0.push(Math.hypot(r0.u - f.truth[0], r0.v - f.truth[1])); e1.push(Math.hypot(r1.u - f.truth[0], r1.v - f.truth[1]));
+  }
+  const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+  lines.push(`distorted frames, mean aim error: no lens correction ${mean(e0).toFixed(4)}, with k1=-0.178 ${mean(e1).toFixed(4)} (of screen width)`);
+  lines.push(`${mean(e1) < 0.003 && mean(e1) < mean(e0) ? 'ok  ' : 'FAIL'} lens correction reduces aim error`); if (!(mean(e1) < 0.003 && mean(e1) < mean(e0))) fail++;
+  const fit = T.fitLens(samples);
+  lines.push(`${Math.abs(fit.k1 - K) < 0.03 ? 'ok  ' : 'FAIL'} lens fit recovers k1: ${fit.k1.toFixed(3)} (true ${K}), edge rms ${fit.rms0.toFixed(2)} -> ${fit.rms.toFixed(2)} px`); if (!(Math.abs(fit.k1 - K) < 0.03)) fail++;
+  const fitted = frames.map((f) => { const r = T.createTracker({ alpha: 1, k1: fit.k1 }).update(f); return Math.hypot(r.u - f.truth[0], r.v - f.truth[1]); });
+  lines.push(`${mean(fitted) < 0.003 ? 'ok  ' : 'FAIL'} aim error with the fitted k1: ${mean(fitted).toFixed(4)}`); if (!(mean(fitted) < 0.003)) fail++;
+}
+{ // threshold: auto picks one for a dim border (peak luma ~100), a fixed 200 would miss it
+  const f = frame([[50, 30], [270, 45], [262, 200], [40, 185]]);
+  for (let i = 0; i < f.data.length; i += 4) if (f.data[i] === 255) f.data[i] = f.data[i + 1] = f.data[i + 2] = 100;
+  const auto = T.createTracker({ auto: true }).update(f), fixed = T.createTracker({ auto: false, threshold: 200 }).update(f);
+  const ok1 = auto.valid && Math.hypot(auto.u - f.truth[0], auto.v - f.truth[1]) < 0.02 && !fixed.valid;
+  lines.push(`${ok1 ? 'ok  ' : 'FAIL'} auto threshold finds a dim border (auto valid=${auto.valid}), fixed 200 does not (valid=${fixed.valid})`); if (!ok1) fail++;
+}
+{ // game content merged into the border at a low threshold: a higher candidate must still find the ring
+  const f = frame([[50, 30], [270, 45], [262, 200], [40, 185]]);
+  const Hq = T.solveHomography([[50, 30], [270, 45], [262, 200], [40, 185]], unit);
+  for (let y = 0; y < 240; y++) for (let x = 0; x < 320; x++) {
+    const [u, v] = T.applyH(Hq, x, y);
+    const inside = u > 0.06 && u < 0.94 && v > 0.1 && v < 0.9;       // everything inside the ring is bright game content (luma 160)...
+    const bridge = Math.abs(u - 0.5) < 0.03 && v > 0.02 && v < 0.15;   // ...joined to the ring by a bridge across the gap
+    if ((inside || bridge) && u >= 0 && v >= 0 && u <= 1 && v <= 1) { const i = (y * 320 + x) * 4; if (f.data[i] < 255) f.data[i] = f.data[i + 1] = f.data[i + 2] = 160; }
+  }
+  const lowOnly = T.findBorder(f, { auto: false, threshold: 60 }), r = T.createTracker().update(f);
+  const ok2 = !lowOnly.ok && lowOnly.fail === 'solid' && r.valid && Math.hypot(r.u - f.truth[0], r.v - f.truth[1]) < 0.02;
+  lines.push(`${ok2 ? 'ok  ' : 'FAIL'} merged content: low threshold rejects it (${lowOnly.fail}), auto finds the ring (valid=${r.valid})`); if (!ok2) fail++;
+  const empty = T.createTracker(), e = empty.update({ data: new Uint8ClampedArray(320 * 240 * 4), width: 320, height: 240 });
+  lines.push(`${!e.valid && empty.lastFail === 'nothing' ? 'ok  ' : 'FAIL'} empty frame reports why: ${empty.lastFail}`); if (e.valid || empty.lastFail !== 'nothing') fail++;
+}
+{ // dropout bridging: the camera pans left until the border runs off the frame edge (no solvable border), then returns
+  const Q0 = [[60, 40], [260, 45], [255, 200], [55, 195]], shiftQ = (dx) => Q0.map(([x, y]) => [x + dx, y]);
+  const seq = [0, -14, -28, -42, -56, -70, -84, -98, -112, -126, 20], tr = T.createTracker({ alpha: 1 });
+  let bridgedErr = [], frozenErr = [], lastValid = null, ok3 = true, nb = 0, recovered = false;
+  seq.forEach((dx, i) => {
+    const f = frame(shiftQ(dx)), r = tr.update(f);
+    if (r.valid && !r.bridged) { lastValid = f.truth; if (nb) recovered = Math.hypot(r.u - f.truth[0], r.v - f.truth[1]) < 0.02; }
+    if (r.bridged) { nb++; bridgedErr.push(Math.hypot(r.u - f.truth[0], r.v - f.truth[1])); frozenErr.push(Math.hypot(lastValid[0] - f.truth[0], lastValid[1] - f.truth[1])); }
+  });
+  const mx = (a) => Math.max(...a), pass = nb >= 4 && mx(bridgedErr) < 0.06 && mx(bridgedErr) < mx(frozenErr) / 2 && recovered;
+  lines.push(`${pass ? 'ok  ' : 'FAIL'} dropout bridging: ${nb} frames bridged, worst error ${nb ? mx(bridgedErr).toFixed(3) : '-'} vs ${nb ? mx(frozenErr).toFixed(3) : '-'} if frozen; snaps back on recovery=${recovered}`); if (!pass) fail++;
+  const tr2 = T.createTracker({ bridge: false }); tr2.update(frame(Q0)); const dead = tr2.update(frame(shiftQ(-150)));
+  lines.push(`${!dead.valid ? 'ok  ' : 'FAIL'} bridging can be turned off (valid=${dead.valid})`); if (dead.valid) fail++;
+  const tr3 = T.createTracker({ alpha: 1, maxBridge: 3 }); tr3.update(frame(Q0)); let still = 0;
+  for (let i = 1; i <= 8; i++) { const r = tr3.update(frame(shiftQ(-14 * (i + 4)))); if (r.valid) still++; }
+  lines.push(`${still <= 3 ? 'ok  ' : 'FAIL'} bridging gives up after maxBridge frames (${still} valid)`); if (still > 3) fail++;
+}
+lines.push(fail ? `RESULT: ${fail} FAILED` : `RESULT: ALL PASSED (worst err ${worst.toFixed(4)} of screen)`);
+document.getElementById('out').textContent = lines.join('\n');
+</script>

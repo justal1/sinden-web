@@ -1,0 +1,106 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Gun input test</title>
+<style>
+  body { margin: 0; background: #0b0f17; color: #cfe0f5; font: 14px/1.5 ui-monospace, Menlo, monospace; padding: 16px; }
+  button { font: inherit; padding: 6px 12px; margin-right: 8px; }
+  #log { white-space: pre; height: 60vh; overflow: auto; background: #05080d; border: 1px solid #243046; padding: 8px; margin-top: 10px; }
+  .k { color: #7dffb0 } .m { color: #ffd84a } .g { color: #6bd6ff } .s { color: #ff9bd0 }
+</style>
+<h3>Pull the trigger and press every button on the gun. Click this page first.</h3>
+<button id="ser">Connect serial port (raw)</button><button id="wake">Wake gun (handshake + buttons)</button><button id="pos1">Position x1</button><button id="pos10">Burst 20 @ 10Hz</button><button id="pos60">Burst 50 @ 60Hz (may wedge)</button><button id="ping">Ping gun (ask firmware)</button><button id="copy">Copy log to clipboard</button><button id="clr">Clear</button>
+<span id="st"></span>
+<div style="margin:8px 0">
+  <label><input type="checkbox" id="probeLike" checked> reference-probe startup (also read camera name + unique id)</label>
+  &nbsp; position rate <select id="rate"><option value="0" selected>none (safe test)</option><option value="16">60 Hz</option><option value="100">10 Hz</option><option value="500">2 Hz</option></select>
+</div>
+<div id="log"></div>
+<script src="gun.js"></script>
+<script>
+const log = document.getElementById('log');
+const add = (cls, t) => { const d = document.createElement('div'); d.className = cls; d.textContent = (performance.now() / 1000).toFixed(2) + '  ' + t; log.appendChild(d); log.scrollTop = log.scrollHeight; };
+for (const t of ['mousedown', 'mouseup', 'pointerdown', 'auxclick', 'wheel'])
+  window.addEventListener(t, (e) => add('m', `${t} button=${e.button} buttons=${e.buttons} x=${e.clientX} y=${e.clientY}`), { passive: true });
+window.addEventListener('contextmenu', (e) => { e.preventDefault(); add('m', 'contextmenu'); });
+for (const t of ['keydown', 'keyup'])
+  window.addEventListener(t, (e) => { add('k', `${t} key="${e.key}" code=${e.code}`); e.preventDefault(); });
+// gamepads
+const seen = {};
+window.addEventListener('gamepadconnected', (e) => add('g', `gamepad connected: ${e.gamepad.id}`));
+setInterval(() => {
+  for (const gp of navigator.getGamepads()) {
+    if (!gp) continue;
+    const key = gp.buttons.map((b) => (b.pressed ? 1 : 0)).join('') + '|' + gp.axes.map((a) => a.toFixed(1)).join(',');
+    if (seen[gp.index] !== key) { seen[gp.index] = key; add('g', `gamepad ${gp.index} buttons=${gp.buttons.map((b) => (b.pressed ? 1 : 0)).join('')} axes=${gp.axes.map((a) => a.toFixed(2)).join(',')}`); }
+  }
+}, 16);
+// serial
+document.getElementById('ser').onclick = async () => {
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    document.getElementById('st').textContent = ' serial open';
+    const reader = port.readable.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      add('s', `serial ${value.length}B: ${[...value].map((b) => b.toString(16).padStart(2, '0')).join(' ')}  "${[...value].map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('')}"`);
+    }
+  } catch (e) { add('s', 'serial error: ' + e.message); }
+};
+document.getElementById('wake').onclick = async () => {
+  const hx = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join(' ');
+  let gun;
+  try {
+    const port = await SindenGun.pickPort();
+    gun = new SindenGun.SindenSerial(port, {
+      onLog: (s) => add('s', 'log: ' + s),
+      onRaw: (d, b) => (d === 'tx' && b[1] === 40 && b.length === 7) ? 0 : add('s', `${d} ${b.length}B: ${b.length > 16 ? hx(b.slice(0, 16)) + ' ...' : hx(b)}`),
+      onEvent: (e) => add('s', 'EVENT ' + JSON.stringify(e)),
+    });
+    await gun.open(); add('s', 'port open, waking...');
+    await gun.wake({ recoil: null, probeLike: document.getElementById('probeLike').checked });
+    add('s', `WAKE OK, firmware ${gun.firmware}. Streaming position at 60Hz; now pull the trigger and press buttons.`);
+    window.gun = gun;
+    setTimeout(() => { add('s', 'auto-ping: asking firmware (expect rx 01 09 as two bytes or one 2B line)'); gun.write(SindenGun.frame(SindenGun.CMD.FIRMWARE_VERSION)); }, 3000);
+    add('s', 'trigger test window: pull the trigger and press every button now');
+    const rate = +document.getElementById('rate').value;
+    if (rate) setInterval(() => gun.setPosition(0.5, 0.5), rate);
+    let last = 0, lastDone = 0;
+    setInterval(() => {
+      const n = gun.positionsSent || 0, issued = gun.writesIssued || 0, done = gun.writesDone || 0;
+      add('s', `last 2s: positions sent ${n - last}, writes completed ${done - lastDone} (issued ${issued} total, ${issued - done} stuck)`);
+      last = n; lastDone = done;
+    }, 2000);
+  } catch (e) { add('s', 'WAKE FAILED: ' + e.message); }
+};
+function burst(n, ms) {
+  if (!window.gun) { add('s', 'wake the gun first'); return; }
+  let i = 0; add('s', `sending ${n} position frame(s) every ${ms}ms (centre of screen)`);
+  const t = setInterval(() => { window.gun.setPosition(0.5, 0.5); if (++i >= n) { clearInterval(t); add('s', 'burst done'); } }, ms);
+}
+document.getElementById('pos1').onclick = () => burst(1, 1);
+document.getElementById('pos10').onclick = () => burst(20, 100);
+document.getElementById('pos60').onclick = () => burst(50, 16);
+// report the system cursor only when it jumps, to see if the gun moves it
+let lastMx = -999, lastMy = -999;
+window.addEventListener('mousemove', (e) => { if (Math.hypot(e.screenX - lastMx, e.screenY - lastMy) > 80) { lastMx = e.screenX; lastMy = e.screenY; add('m', `cursor moved to screen ${e.screenX},${e.screenY}`); } }, { passive: true });
+// scrolling the log isn't gun input
+document.getElementById('log').addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+document.getElementById('ping').onclick = async () => {
+  if (!window.gun) { add('s', 'wake the gun first'); return; }
+  // In event mode replies show up as raw rx lines; 01 09 means firmware 1.9 and the gun is still in step.
+  add('s', 'pinging: sending firmware query (expect rx 2B: 01 09)');
+  await window.gun.write(SindenGun.frame(SindenGun.CMD.FIRMWARE_VERSION));
+};
+document.getElementById('copy').onclick = async () => {
+  const text = [...log.children].map((d) => d.textContent).join('\n');
+  try { await navigator.clipboard.writeText(text); add('k', 'copied ' + text.split('\n').length + ' lines to clipboard'); }
+  catch (e) {   // fall back for contexts where the async clipboard API is blocked
+    const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); add('k', ok ? 'copied (fallback)' : 'copy failed: ' + e.message);
+  }
+};
+document.getElementById('clr').onclick = () => (log.textContent = '');
+add('k', 'ready');
+</script>

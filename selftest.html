@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gun Arcade</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas#c { display: block; width: 100vw; height: 100vh; cursor: none; }
+  #panel {
+    position: fixed; top: 90px; right: 90px; width: 250px; padding: 12px 14px;
+    background: rgba(8, 10, 18, .92); color: #8fa0b8; font: 12px/1.5 system-ui, sans-serif;
+    border: 1px solid #243046; border-radius: 8px; z-index: 5;
+  }
+  #panel.hidden { display: none; }
+  #panel h3 { margin: 0 0 8px; font-size: 13px; color: #c5d2e6; font-weight: 600; }
+  #panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 5px 0; }
+  #panel select, #panel button { background: #141b2b; color: #c5d2e6; border: 1px solid #2b3850; border-radius: 4px; padding: 3px 6px; font: inherit; max-width: 150px; }
+  #panel button { cursor: pointer; }
+  #panel input[type=range] { width: 120px; }
+  #panel input:disabled { opacity: .35; }
+  #thrVal, #lensInfo { color: #7dffb0; }
+  #dbg { width: 100%; height: auto; background: #000; margin-top: 6px; border-radius: 4px; display: block; }
+  #status, #gunStatus { margin-top: 6px; min-height: 18px; }
+  #hint { margin-top: 6px; color: #5d6c84; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel">
+  <h3>Gun Arcade &middot; setup</h3>
+  <label>Aim with
+    <select id="mode"><option value="mouse">Mouse</option><option value="gun">Light gun</option></select>
+  </label>
+  <div id="gunOnly">
+    <label><span></span><button id="wake">Wake gun (serial)</button></label>
+    <div id="gunStatus">gun not connected: the trigger needs this</div>
+    <label>Camera <select id="cams"></select></label>
+    <label><span></span><button id="startCam">Start camera</button></label>
+    <label>Auto threshold <input id="auto" type="checkbox" checked></label>
+    <label>Threshold <span id="thrVal"></span><input id="thr" type="range" min="20" max="250" value="200"></label>
+    <label id="expRow">Exposure <input id="exp" type="range" min="0" max="100" value="15"></label>
+    <label>Smoothing <input id="smooth" type="range" min="0" max="75" value="40"></label>
+    <label><span id="lensInfo">lens: none</span><button id="fitLens">Fit lens</button></label>
+    <label>Recoil <span><input id="recoil" type="checkbox"> <input id="recoilStr" type="range" min="10" max="100" value="60" style="width:80px"></span></label>
+    <label>Flip X / Y <span><input id="flipX" type="checkbox"> <input id="flipY" type="checkbox"></span></label>
+    <canvas id="dbg" width="320" height="240"></canvas>
+    <div id="status">camera off</div>
+  </div>
+  <label>Crosshair <input id="xhair" type="checkbox" checked></label>
+  <label><span></span><button id="fs">Fullscreen</button></label>
+  <div id="hint">Tab shows or hides this panel.<br>Reload: R, right-click, or shoot off-screen with the gun.</div>
+</div>
+<video id="vid" playsinline muted style="display:none"></video>
+<script src="tracker.js"></script>
+<script src="gun.js"></script>
+<script src="game.js"></script>
+<pre id="out" style="position:fixed;left:0;top:0;color:#0f0;background:#000;z-index:99;display:none"></pre>
+<script src="minigames.js"></script>
+<script src="selftest.js"></script>
+</body>
+</html>

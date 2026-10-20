@@ -1,0 +1,100 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gun protocol test</title>
+<pre id="out">running</pre>
+<script src="gun.js"></script>
+<script>
+// Protocol tests against known answers from the sindenrs test suite, plus a mock gun that
+// speaks the other side of the handshake, to exercise the whole wake-up sequence.
+const G = SindenGun, out = [];
+let fail = 0;
+const ok = (c, m) => { out.push((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
+const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+const enc = new TextEncoder();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Mock gun: reads the host's byte stream, answers like the real firmware.
+function mockGun() {
+  let rxCtl, rx = [], pendingAuth = null, mode = 'cmd', hostChallenge = null;
+  const sent = [], stamps = [];            // frames the host sent, and when
+  const readable = new ReadableStream({ start(c) { rxCtl = c; } });
+  const reply = (bytes) => rxCtl.enqueue(Uint8Array.from(bytes));
+  const secret = (s) => enc.encode(s);
+  async function sha(...p) { const b = new Uint8Array(p.reduce((n, x) => n + x.length, 0)); let o = 0; for (const x of p) { b.set(x, o); o += x.length; } return [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))]; }
+  async function onBytes(chunk) {
+    rx.push(...chunk);
+    for (;;) {
+      if (mode === 'nonce') { if (rx.length < 32) return; const n = rx.splice(0, 32); mode = 'cmd'; reply(await sha(Uint8Array.from(n), secret('SindenLightgun364294735243894HaveANiceDay'))); continue; }
+      if (mode === 'hostresp') {
+        if (rx.length < 32) return; const r = rx.splice(0, 32); mode = 'cmd';
+        const want = await sha(Uint8Array.from(hostChallenge), secret('60341663085532170074617363215964'));
+        reply(r.every((v, i) => v === want[i]) ? [...enc.encode('true\n')] : [...enc.encode('false')]); continue;
+      }
+      if (rx.length < 7) return;
+      const f = rx.splice(0, 7); sent.push(f);
+      if (f[0] !== 0xaa || f[6] !== 0xbb) { sent.push(['BAD FRAME']); continue; }
+      if (f[1] === 110) mode = 'nonce';
+      else if (f[1] === 109) { hostChallenge = Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 255); reply(hostChallenge); mode = 'hostresp'; }
+      else if (f[1] === 101) reply([2, 1]);
+      stamps.push([f[1], performance.now()]);
+    }
+  }
+  const writable = new WritableStream({ write(chunk) { return onBytes(chunk); } });
+  const port = { readable, writable, open: async () => {}, close: async () => {}, setSignals: async () => {} };
+  return { port, sent, reply, stamps };
+}
+
+(async () => {
+  // known answers, from sindenrs src/protocol/auth.rs tests
+  ok(hex(await G.gunResponse(new Uint8Array(32))) === 'bd974c0b63df85db34e5e5e74e719665a02a915f294b000a64525dc082dfc054', 'gun-response known answer');
+  ok(hex(await G.hostResponse(Uint8Array.from({ length: 32 }, (_, i) => i))) === '97e26ae6b25bab57de9d06710576ec17d89606e34ea2c4b23aad33858f39f003', 'host-response known answer');
+  ok(hex(G.frame(40, [1, 2, 3, 4])) === 'aa280102030 4bb'.replace(' ', ''), 'frame layout');
+  const bf = G.buttonFrames({ trigger: ['mouse_left', 'mouse_left'] });
+  ok(bf.length === 41 && hex(bf[0]) === 'aa3c006400ffbb' && hex(bf[10]) === 'aa3c006e00ffbb' && hex(bf[40]) === 'aa3c008c0000bb', `button map: 41 frames, trigger slot 100/110 = 0xFF, pedal slot 140 (${hex(bf[0])})`);
+
+  // parser: split reports, single-byte events
+  const p = G.createEventParser();
+  ok(p.feed([254, 1]).length === 0, 'parser holds partial report');
+  const evs = p.feed([0, 0x96, 201]);
+  ok(evs.length === 2 && evs[0].type === 'buttons' && (evs[0].state1 & 1) === 1 && evs[1].type === 'calibration-set', 'parser finishes report and reads next event');
+
+  // full wake-up against the mock
+  const m = mockGun(), events = [];
+  const gun = new G.SindenSerial(m.port, { onEvent: (e) => events.push(e), onLog: (s) => out.push('log: ' + s) });
+  await gun.open();
+  await gun.wake({ recoil: null });
+  ok(gun.firmware === '2.1', 'handshake succeeded, firmware ' + gun.firmware);
+  const cmds = m.sent.map((f) => f[1]);
+  ok(cmds.indexOf(110) < cmds.indexOf(109) && cmds.indexOf(109) < cmds.indexOf(60), 'order: auth legs before button map');
+  ok(cmds.filter((c) => c === 60).length === 41, '41 button-map frames sent');
+  ok(cmds.includes(50) && cmds.indexOf(50) > cmds.lastIndexOf(60), 'secondary serial (button reports) enabled after map');
+  ok(cmds.filter((c) => c === 121).length === 2 && cmds.lastIndexOf(50) > cmds.lastIndexOf(121), 'stream start sent twice, button reports re-asserted after it');
+  gun.setPosition(0.5, 0.25); await sleep(20);
+  ok(hex(m.sent.at(-1)) === 'aa28400020 00bb'.replace(' ', ''), 'position frame: 0.5,0.25 -> 0x4000,0x2000 (' + hex(m.sent.at(-1)) + ')');
+  ok(m.sent.some((f) => f[1] === 161 && f[2] === 0) && !m.sent.some((f) => f[1] === 161 && f[2] === 1), 'recoil explicitly off');
+  ok(!m.sent.some((f) => f[0] === 'BAD FRAME'), 'every frame well-formed');
+  const maps = m.stamps.filter((s) => s[0] === 60), gaps = maps.slice(1).map((s, i) => s[1] - maps[i][1]);
+  ok(Math.min(...gaps) >= 12, `button-map frames paced: smallest gap ${Math.min(...gaps).toFixed(1)} ms (needs >= 12; the real gun loses sync below ~15 with a non-default map)`);
+
+  // button events after wake
+  m.reply([254, 1, 0, 0x96]); m.reply([254, 0, 0, 0x96]); m.reply([254, 0, 4, 0x96]);
+  await sleep(50);
+  const b = events.filter((e) => e.type === 'buttons');
+  ok(b.length === 3 && (b[0].state1 & 1) && !(b[1].state1 & 1) && b[2].state2 === 4, 'trigger down/up and another button decoded');
+
+  // recoil path
+  await gun.setRecoil({ strength: 60 });
+  await gun.fireRecoil(); await sleep(20);
+  ok(m.sent.some((f) => f[1] === 172 && f[2] === 150) && m.sent.at(-1)[1] === 168, 'recoil: strength 60% -> 150, test pulse fired');
+
+  // a wrong gun must be rejected
+  const bad = mockGun(); const g2 = new G.SindenSerial(bad.port); await g2.open();
+  const origAuth = g2.authenticate.bind(g2);
+  g2.authenticate = async () => { g2.drain(); const n = crypto.getRandomValues(new Uint8Array(32)); const msg = new Uint8Array(39); msg.set(G.frame(110)); msg.set(n, 7); await g2.write(msg); await g2.readExact(32, 300); throw new Error('stub'); };
+  let threw = false; try { await g2.wake(); } catch (e) { threw = true; }
+  ok(threw, 'wake() reports failure when the gun answers wrongly or not at all');
+
+  out.push(fail ? `RESULT: ${fail} FAILED` : 'RESULT: ALL PASSED');
+  document.getElementById('out').textContent = out.join('\n');
+})().catch((e) => { document.getElementById('out').textContent = out.join('\n') + '\nEXCEPTION ' + e.stack + '\nRESULT: FAILED'; });
+</script>
