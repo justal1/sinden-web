@@ -74,12 +74,12 @@
   if (scene === 'over') { g.startGame(); G.score = 340; g.update(61); G.overAt = 0; }
   document.getElementById('out').textContent = out.join('\n') + '\nRESULT: ' + (out.some(l => /^(FAIL|EXC)/.test(l)) ? 'FAILED' : 'ALL PASSED');
 })();
-// Point Blank: every stage must be winnable by a perfect player and lost by a player who does nothing, at several levels.
+// Quick Fire: every stage must be winnable by a perfect player and lost by a player who does nothing, at several levels.
 if (location.hash === '#pb') (() => {
   const pb = window.__pb, g = window.__gallery, out = [];
   const ok = (c, m) => out.push((c ? 'ok   ' : 'FAIL ') + m);
   try {
-    ok(g.modes.some((m) => m.id === 'pointblank'), 'Point Blank registered on the title screen');
+    ok(g.modes.some((m) => m.id === 'quickfire'), 'Quick Fire registered on the title screen');
     const names = pb.GAMES.map((x) => x.id);
     for (const lv of [0, 2, 5]) {
       const res = [];
@@ -103,8 +103,8 @@ if (location.hash === '#pb') (() => {
     }
     // full run through the engine: start from the title screen, idle until game over, shoot to exit
     g.setMode('mouse'); g.toTitle();
-    const item = g.G.menu.find((m) => m.label === 'POINT BLANK');
-    ok(!!item, 'title menu has a POINT BLANK target');
+    const item = g.G.menu.find((m) => m.label === 'QUICK FIRE');
+    ok(!!item, 'title menu has a QUICK FIRE target');
     item.act(); ok(g.G.state === 'mode', 'selecting it enters the mode');
     let steps = 0; while (pb.R.phase !== 'over' && steps < 60 * 400) { g.update(1 / 60); steps++; }
     ok(pb.R.phase === 'over' && pb.R.lives <= 0, `idle run ends in game over after ${pb.R.stage} stages (${(steps / 60).toFixed(0)} s)`);

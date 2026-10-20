@@ -1,4 +1,4 @@
-// Point Blank-style mode: a run of short, silly shooting challenges. Clear a stage to score, fail
+// Quick Fire mode: a run of short, silly shooting challenges. Clear a stage to score, fail
 // and lose a life; three lives. After all eight stages the loop restarts, faster and smaller.
 // Plugs into the engine in game.js through window.Engine. Positions are fractions of the playfield
 // (fx across its width, fy down its height); sizes are fractions of its height.
@@ -375,7 +375,7 @@
   ];
 
   // ---------- the run: intro card -> play -> result, three lives ----------
-  const R = { phase: 'idle', t: 0, order: [], idx: 0, lives: 3, score: 0, stage: 0, lv: 0, game: null, def: null, left: 0, shots: 0, hits: 0, resultKind: '', best: E.store.get('best.pointblank', 0), newBest: false, flash: 0 };
+  const R = { phase: 'idle', t: 0, order: [], idx: 0, lives: 3, score: 0, stage: 0, lv: 0, game: null, def: null, left: 0, shots: 0, hits: 0, resultKind: '', best: E.store.get('best.quickfire', 0), newBest: false, flash: 0 };
 
   function nextOrder() { const o = GAMES.map((_, i) => i); for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; } return o; }
   function start() {
@@ -395,7 +395,7 @@
     } else { R.lives--; sfx.over(); E.shake(0.8); }
   }
   function advance() {
-    if (R.lives <= 0) { R.phase = 'over'; R.t = 0; if (R.score > R.best) { R.best = R.score; E.store.set('best.pointblank', R.best); R.newBest = true; } return; }
+    if (R.lives <= 0) { R.phase = 'over'; R.t = 0; if (R.score > R.best) { R.best = R.score; E.store.set('best.quickfire', R.best); R.newBest = true; } return; }
     if (++R.idx >= R.order.length) { R.idx = 0; R.order = R.fixedOrder || nextOrder(); R.lv++; }
     intro();
   }
@@ -456,7 +456,7 @@
     }
   }
 
-  const mode = { id: 'pointblank', label: 'POINT BLANK', start, update, draw, shot };
+  const mode = { id: 'quickfire', label: 'QUICK FIRE', start, update, draw, shot };
   E.register(mode);
 
   // test hooks: drive any stage directly and ask what a perfect player would shoot

@@ -1,4 +1,4 @@
-# Gun Arcade (gallery + Point Blank)
+# Gun Arcade (gallery + Quick Fire)
 
 > **Unofficial and experimental.** Not affiliated with or endorsed by Sinden Technology. It talks to the gun
 > over Web Serial and writes a button map to it, which I suspect lands in the gun's EEPROM. Use at your own
@@ -6,15 +6,15 @@
 >
 > **Status.** Developed on macOS (Apple Silicon), Chrome, one gun (firmware 1.9, camera `16d0:1097`).
 > Verified on the real gun: serial handshake, trigger and button reports, position streaming, camera aim.
-> Not yet verified on the real gun: the whole game over a long session, frame rate, recoil, Point Blank feel.
+> Not yet verified on the real gun: the whole game over a long session, frame rate, recoil, Quick Fire feel.
 > Needs Chrome or Edge (Web Serial + camera). Firefox and Safari won't work.
 
 Carnival shooting gallery for a mouse or a Sinden-style light gun, in a single browser page
 (Chrome). The game draws its own white border and reads the gun's camera itself, so no Sinden
 driver is needed. Open `index.html` in Chrome (file:// works; camera needs a user click).
 
-## Point Blank mode
-Shoot the POINT BLANK target on the title screen. A run is a string of short challenges, three lives, eight stages
+## Quick Fire mode
+Shoot the QUICK FIRE target on the title screen. A run is a string of short challenges, three lives, eight stages
 per loop (then faster and smaller): shooting range, can crush (limited ammo), balloon pop (avoid bombs), clay pigeons,
 shoot 1..n in order, high noon (shoot bandits, spare civilians), robot boss (only the glowing core hurts), colour code.
 Clear a stage = 1000 + time bonus. Aiming off-screen does nothing in this mode (unlimited ammo).
