@@ -293,13 +293,17 @@
     if (others) reload();
     gunStatus(`gun awake, fw ${serialGun ? serialGun.firmware || '?' : '?'} · buttons ${ev.state1.toString(2).padStart(8, '0')} ${ev.state2.toString(2).padStart(8, '0')}`);
   }
-  async function wakeGun() {
-    if (serialGun) { const g = serialGun; serialGun = null; await g.close(); $('wake').textContent = 'Wake gun (serial)'; gunStatus('gun disconnected'); return; }
+  // auto: connect only if the browser already has permission for the gun (no click available at page load).
+  async function wakeGun(auto) {
+    if (auto !== true && serialGun) { const g = serialGun; serialGun = null; await g.close(); $('wake').textContent = 'Wake gun (serial)'; gunStatus('gun disconnected'); return; }
+    if (serialGun) return;
     if (!navigator.serial) { gunStatus('Web Serial needs Chrome or Edge'); return; }
     let g = null;
     try {
+      const port = await SindenGun.pickPort(auto !== true);
+      if (!port) { gunStatus('gun not connected: click anywhere once to pick it'); return false; }
       gunStatus('connecting...');
-      g = new SindenGun.SindenSerial(await SindenGun.pickPort(), { onEvent: onGunEvent, onLog: (s) => gunStatus(s) });
+      g = new SindenGun.SindenSerial(port, { onEvent: onGunEvent, onLog: (s) => gunStatus(s) });
       await g.open();
       await g.wake({ recoil: S.recoil ? { strength: S.recoilStr } : null });
       serialGun = g; prevBtn = [0, 0];
@@ -681,9 +685,26 @@
     $('flipX').checked = S.flipX; $('flipY').checked = S.flipY; $('xhair').checked = S.crosshair;
     $('gunOnly').style.display = S.mode === 'gun' ? '' : 'none';
   }
-  $('mode').onchange = (e) => { S.mode = e.target.value; saveS(); syncPanel(); if (S.mode === 'gun') listCams(); };
+  $('mode').onchange = (e) => { S.mode = e.target.value; saveS(); syncPanel(); if (S.mode === 'gun') autoConnect(); };
   $('startCam').onclick = startCam;
-  $('wake').onclick = wakeGun;
+  $('wake').onclick = () => wakeGun();
+
+  // Light gun mode: start the Sinden camera and serial link without the setup panel.
+  const isSinden = (o) => /sinden|lightgun/i.test(o.textContent);
+  async function autoConnect() {
+    if (S.mode !== 'gun') return;
+    if (!gun.stream) {
+      await listCams();
+      let opt = [...$('cams').options].find(isSinden);
+      if (!opt) { await startCam(); opt = [...$('cams').options].find(isSinden); }   // camera names stay hidden until permission is given
+      if (opt && (!gun.track || gun.track.getSettings().deviceId !== opt.value)) { $('cams').value = opt.value; await startCam(); }
+      else if (!opt) setStatus('Sinden camera not found, using the selected camera');
+    }
+    if (!serialGun && navigator.serial) await wakeGun(true);
+  }
+  // The first time, the browser only shows its serial chooser after a click.
+  document.addEventListener('pointerdown', () => { if (S.mode === 'gun' && !serialGun && navigator.serial) wakeGun(true).then((r) => { if (r === false) wakeGun(); }); }, { once: true });
+  if (navigator.serial) navigator.serial.addEventListener('connect', () => { if (S.mode === 'gun' && !serialGun) wakeGun(true); });
   const pushRecoil = () => { if (serialGun) serialGun.setRecoil(S.recoil ? { strength: S.recoilStr } : null).catch(() => {}); };
   $('recoil').onchange = (e) => { S.recoil = e.target.checked; saveS(); pushRecoil(); };
   $('recoilStr').onchange = (e) => { S.recoilStr = +e.target.value; saveS(); pushRecoil(); };
@@ -715,5 +736,6 @@
   window.__gallery = { G, S, aim, mouse, updateAim, trigger, fire, onGunEvent, startGame, startCalib, toTitle, update, gun, tracker, startMode, modes, get worker() { return !!worker; }, perf, startLensFit, setMode(m) { S.mode = m; } };
 
   toTitle();
+  autoConnect();
   requestAnimationFrame(frame);
 })();

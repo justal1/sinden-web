@@ -252,10 +252,11 @@
   }
 
   // Find the gun's serial port: a previously granted one, else ask the user (needs a click).
-  async function pickPort() {
+  // With ask=false it only returns an already granted port (no click needed), else null.
+  async function pickPort(ask = true) {
     const filters = [{ usbVendorId: SINDEN_USB_VENDOR }];
     const granted = (await navigator.serial.getPorts()).filter((p) => (p.getInfo().usbVendorId === SINDEN_USB_VENDOR));
-    return granted[0] || navigator.serial.requestPort({ filters });
+    return granted[0] || (ask ? navigator.serial.requestPort({ filters }) : null);
   }
 
   const api = { SindenSerial, pickPort, buttonFrames, createEventParser, gunResponse, hostResponse, frame, CMD, GAME_BUTTONS };
