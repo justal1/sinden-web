@@ -283,7 +283,13 @@
 
   // ---------- gun serial link: wakes the gun so the trigger and buttons work ----------
   let serialGun = null, prevBtn = [0, 0];
-  const gunStatus = (t) => { $('gunStatus').textContent = t; };
+  // Everything the serial link says, with raw bytes, so a failed connection can be copied out and diagnosed.
+  const gunLog = [], t0 = performance.now();
+  const logLine = (t) => { gunLog.push(((performance.now() - t0) / 1000).toFixed(2) + 's ' + t); if (gunLog.length > 400) gunLog.shift(); };
+  const gunStatus = (t) => { $('gunStatus').textContent = t; logLine(t); };
+  const hex = (b) => [...b.slice(0, 40)].map((x) => x.toString(16).padStart(2, '0')).join(' ') + (b.length > 40 ? ` ...(${b.length} bytes)` : '');
+  const onGunRaw = (dir, b) => { if (!(dir === 'rx' && serialGun)) logLine(dir + ' ' + hex(b)); };   // skip the constant button reports once awake
+  $('copyLog').onclick = () => { const txt = `${navigator.userAgent}\n` + gunLog.join('\n'); navigator.clipboard.writeText(txt).then(() => { $('copyLog').textContent = 'Copied'; setTimeout(() => { $('copyLog').textContent = 'Copy gun log'; }, 1500); }, () => { prompt('Copy this:', txt); }); };
   function onGunEvent(ev) {
     if (ev.type === 'closed') { if (serialGun) { serialGun = null; $('wake').textContent = 'Wake gun (serial)'; gunStatus('gun disconnected'); } return; }
     if (ev.type !== 'buttons') return;
@@ -291,7 +297,7 @@
     if (ev.state1 & 1 && !(p1 & 1)) fire();                                  // trigger pulled
     const others = (ev.state1 & ~1 & ~p1) | (ev.state2 & ~p2);               // any other button newly pressed
     if (others) reload();
-    gunStatus(`gun awake, fw ${serialGun ? serialGun.firmware || '?' : '?'} · buttons ${ev.state1.toString(2).padStart(8, '0')} ${ev.state2.toString(2).padStart(8, '0')}`);
+    $('gunStatus').textContent = (`gun awake, fw ${serialGun ? serialGun.firmware || '?' : '?'} · buttons ${ev.state1.toString(2).padStart(8, '0')} ${ev.state2.toString(2).padStart(8, '0')}`);
   }
   // auto: connect only if the browser already has permission for the gun (no click available at page load).
   let waking = false;
@@ -303,16 +309,17 @@
     try { return await tryWake(auto); } finally { waking = false; }
   }
   async function tryWake(auto) {
-    const port = await SindenGun.pickPort(auto !== true).catch((e) => { gunStatus('gun error: ' + (e.message || e.name)); return undefined; });
+    const port = await SindenGun.pickPort(auto !== true, auto !== true).catch((e) => { gunStatus('gun error: ' + (e.message || e.name)); return undefined; });
     if (port === undefined) return;
     if (!port) { gunStatus('gun not connected: click anywhere once to pick it'); return false; }
+    try { const i = port.getInfo(); logLine(`port vid=0x${(i.usbVendorId || 0).toString(16)} pid=0x${(i.usbProductId || 0).toString(16)}, ${(await navigator.serial.getPorts()).length} granted port(s), ${auto === true ? 'auto' : 'chooser'}`); } catch {}
     // The handshake often fails right after plugging in or page load, so retry a few times.
     const TRIES = 5, RETRY_MS = 3000;
     for (let n = 1; n <= TRIES; n++) {
       let g = null;
       try {
         gunStatus(n > 1 ? `connecting... (try ${n}/${TRIES})` : 'connecting...');
-        g = new SindenGun.SindenSerial(port, { onEvent: onGunEvent, onLog: (s) => gunStatus(s) });
+        g = new SindenGun.SindenSerial(port, { onEvent: onGunEvent, onLog: (s) => gunStatus(s), onRaw: onGunRaw });
         await g.open();
         await g.wake({ recoil: S.recoil ? { strength: S.recoilStr } : null });
         serialGun = g; prevBtn = [0, 0];

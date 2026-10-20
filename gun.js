@@ -246,17 +246,21 @@
       try { if (this.mode === 'events') await this.write(flag(CMD.RECOIL_ENABLE, false)); } catch {}
       this.mode = 'closed';
       try { await this.reader.cancel(); } catch {}
-      try { this.reader.releaseLock(); this.writer.releaseLock(); } catch {}
+      try { this.reader.releaseLock(); } catch {}
+      // Position frames may still be queued: abort them, or the stream stays locked and the port cannot close.
+      try { await this.writer.abort(); } catch {}
+      try { this.writer.releaseLock(); } catch {}
       try { await this.port.close(); } catch {}
     }
   }
 
   // Find the gun's serial port: a previously granted one, else ask the user (needs a click).
   // With ask=false it only returns an already granted port (no click needed), else null.
-  async function pickPort(ask = true) {
+  // force=true always shows the chooser, so a different port can be picked than the one granted before.
+  async function pickPort(ask = true, force = false) {
     const filters = [{ usbVendorId: SINDEN_USB_VENDOR }];
     const granted = (await navigator.serial.getPorts()).filter((p) => (p.getInfo().usbVendorId === SINDEN_USB_VENDOR));
-    return granted[0] || (ask ? navigator.serial.requestPort({ filters }) : null);
+    return (!force && granted[0]) || (ask ? navigator.serial.requestPort({ filters }) : null);
   }
 
   const api = { SindenSerial, pickPort, buttonFrames, createEventParser, gunResponse, hostResponse, frame, CMD, GAME_BUTTONS };
